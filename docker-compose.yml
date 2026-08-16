@@ -1,28 +1,40 @@
-
 services:
   postgres:
     image: postgres:16-alpine
     container_name: smartwallet-postgres
     restart: unless-stopped
-
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_MULTIPLE_DATABASES: authdb,walletdb
-
     ports:
       - "5432:5432"
-
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh
-
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - smartwallet-net
 
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"     # AMQP protocol port (used by your apps)
+      - "15672:15672"   # Management UI (browser dashboard)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - smartwallet-net
 
@@ -30,33 +42,30 @@ services:
     build:
       context: ./FintechAuthService
       dockerfile: AuthService/Dockerfile
-
     container_name: smartwallet-authservice
     restart: unless-stopped
-
     depends_on:
       postgres:
         condition: service_healthy
-
+      rabbitmq:
+        condition: service_healthy
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
-
       ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=authdb;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
-
       JwtSettings__SecretKey: ${JWT_SECRET}
       JwtSettings__Issuer: AuthService
       JwtSettings__Audience: AuthServiceUsers
       JwtSettings__ExpiryMinutes: "60"
-
       ResendSettings__ApiKey: ${RESEND_API_KEY}
       ResendSettings__From: ${RESEND_FROM}
-
       Services__WalletServiceBaseUrl: "http://walletservice:8080"
-
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Port: "5672"
+      RabbitMQ__Username: guest
+      RabbitMQ__Password: guest
     ports:
       - "5158:8080"
-
     networks:
       - smartwallet-net
 
@@ -64,25 +73,24 @@ services:
     build:
       context: ./FintechWallet
       dockerfile: WalletService/Dockerfile
-
     container_name: smartwallet-walletservice
     restart: unless-stopped
-
     depends_on:
       postgres:
         condition: service_healthy
-
+      rabbitmq:
+        condition: service_healthy
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
-
       ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=walletdb;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
-
       Services__AuthServiceBaseUrl: "http://authservice:8080"
-
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Port: "5672"
+      RabbitMQ__Username: guest
+      RabbitMQ__Password: guest
     ports:
       - "5159:8080"
-
     networks:
       - smartwallet-net
 
